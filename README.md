@@ -19,22 +19,22 @@ A role-based fabric inventory management system for tracking fabric inward, qual
 Create a `.env` file in the root directory with the following variables:
 
 ```env
-# Supabase
-REACT_APP_SUPABASE_URL=your-supabase-url
+# Supabase Configuration
+REACT_APP_SUPABASE_URL=your-supabase-project-url
 REACT_APP_SUPABASE_ANON_KEY=your-supabase-anon-key
 
-# User Roles (emails)
-REACT_APP_INWARD_CLERK_EMAIL=clerk@company.com
-REACT_APP_QUALITY_CHECKER_EMAIL=quality@company.com
-REACT_APP_APPROVER_EMAIL=approver@company.com
-REACT_APP_SUPERADMIN_EMAIL=admin@company.com
-
-# User Passwords (for login)
-REACT_APP_CLERK_PASSWORD=clerk123
-REACT_APP_QUALITY_PASSWORD=quality123
-REACT_APP_APPROVER_PASSWORD=approver123
-REACT_APP_ADMIN_PASSWORD=admin123
+# User Role Assignments (comma-separated emails)
+REACT_APP_INWARD_CLERK_EMAILS=user1@company.com,user2@company.com
+REACT_APP_QUALITY_CHECKER_EMAILS=quality1@company.com,quality2@company.com
+REACT_APP_APPROVER_EMAILS=approver1@company.com,approver2@company.com
+REACT_APP_SUPERADMIN_EMAILS=admin@company.com
 ```
+
+**⚠️ Security Note:** 
+- Never commit the `.env` file to version control
+- Use strong passwords for all user accounts
+- Set up proper Supabase Row Level Security (RLS) policies
+- Regularly rotate API keys and passwords
 
 ### 2. Install Dependencies
 ```bash
@@ -63,14 +63,22 @@ src/
 ```
 
 ## Database Setup
-See the PRD for detailed Supabase database schema and migration scripts.
+Contact your system administrator for database schema and migration scripts.
+
+## Security Features
+- Role-based access control (RBAC)
+- Environment variable protection
+- Secure authentication with Supabase
+- Protected routes and components
+- Input validation and sanitization
 
 ## Current Status
 ✅ Project structure and foundation complete
 ✅ Authentication system with role-based access
 ✅ Layout and navigation components
-✅ Placeholder pages for all modules
-⏳ Module-specific components (Inward Form, Quality Management, etc.)
+✅ All modules implemented with RBAC
+✅ Modern UI with enhanced design system
+✅ Production-ready security measures
 
 ## Next Steps
 1. Set up Supabase database with the provided schema
