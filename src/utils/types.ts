@@ -1,8 +1,7 @@
-import { QUANTITY_UNITS, FABRIC_TYPES, UAT_UNITS, ROLL_UNITS, COLOR_FASTNESS, FABRIC_STATUS, APPROVAL_STATUS, HOLD_REASONS } from './constants';
+import { QUANTITY_UNITS, FABRIC_TYPES, ROLL_UNITS, COLOR_FASTNESS, FABRIC_STATUS, APPROVAL_STATUS, HOLD_REASONS } from './constants';
 
 export type QuantityUnit = typeof QUANTITY_UNITS[number];
 export type FabricType = typeof FABRIC_TYPES[number];
-export type UatUnit = typeof UAT_UNITS[number];
 export type RollUnit = typeof ROLL_UNITS[number];
 export type ColorFastness = typeof COLOR_FASTNESS[number];
 export type FabricStatus = typeof FABRIC_STATUS[number];
@@ -20,8 +19,6 @@ export interface FabricEntry {
   fabric_composition: string;
   date_inwarded: string;
   inwarded_by: string;
-  uat_value: number;
-  uat_unit: UatUnit;
   ftp_document_url?: string;
   status: FabricStatus;
   created_at: string;
@@ -61,6 +58,18 @@ export interface QuantityApproval {
   approval_status: ApprovalStatus;
   hold_reason?: HoldReason;
   received_quantity?: number;
+  not_approved_quantity?: number;
+  approved_by: string;
+  remarks?: string;
+  debit_note_url?: string;
+  created_at: string;
+}
+
+export interface RollApproval {
+  id: string;
+  fabric_roll_id: string;
+  approval_status: ApprovalStatus;
+  hold_reason?: HoldReason;
   not_approved_quantity?: number;
   approved_by: string;
   remarks?: string;

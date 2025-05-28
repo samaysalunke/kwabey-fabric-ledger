@@ -7,7 +7,6 @@ export const ROLES = {
 
 export const QUANTITY_UNITS = ['KG', 'METER'] as const;
 export const FABRIC_TYPES = ['KNITTED', 'WOVEN'] as const;
-export const UAT_UNITS = ['KG', 'METER'] as const;
 export const ROLL_UNITS = ['KG', 'METER'] as const;
 export const COLOR_FASTNESS = ['OKAY', 'NOT_OKAY'] as const;
 export const FABRIC_STATUS = ['PENDING_QUALITY', 'QUALITY_CHECKED', 'READY_TO_ISSUE', 'ON_HOLD'] as const;

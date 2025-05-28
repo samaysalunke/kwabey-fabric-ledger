@@ -1,5 +1,5 @@
 import * as yup from 'yup';
-import { QUANTITY_UNITS, FABRIC_TYPES, UAT_UNITS, ROLL_UNITS, COLOR_FASTNESS, APPROVAL_STATUS, HOLD_REASONS } from './constants';
+import { QUANTITY_UNITS, FABRIC_TYPES, ROLL_UNITS, COLOR_FASTNESS, APPROVAL_STATUS, HOLD_REASONS } from './constants';
 
 export const fabricEntrySchema = yup.object().shape({
   seller_name: yup.string().required('Seller name is required'),
@@ -10,8 +10,6 @@ export const fabricEntrySchema = yup.object().shape({
   po_number: yup.string().required('PO Number is required'),
   fabric_composition: yup.string().required('Fabric composition is required'),
   inwarded_by: yup.string().required('Inwarded by is required'),
-  uat_value: yup.number().required('UAT value is required').positive(),
-  uat_unit: yup.string().oneOf([...UAT_UNITS]).required(),
 });
 
 export const rollSchema = yup.object().shape({

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { yupResolver } from '@hookform/resolvers/yup';
 import * as yup from 'yup';
@@ -16,7 +16,8 @@ import { useApp } from '../../../contexts/AppContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useRBAC } from '../../../hooks/useRBAC';
 import { createCompleteFabricEntry } from '../../../services/fabric.service';
-import { QUANTITY_UNITS, FABRIC_TYPES, UAT_UNITS } from '../../../utils/constants';
+import { QUANTITY_UNITS, FABRIC_TYPES } from '../../../utils/constants';
+
 import ProtectedAction from '../../auth/ProtectedAction';
 // Note: RollRow, RibDetails, and FileUpload components are now integrated inline
 
@@ -37,14 +38,30 @@ const fabricEntrySchema = yup.object().shape({
   po_number: yup.string().required('PO Number is required'),
   fabric_composition: yup.string().required('Fabric composition is required'),
   inwarded_by: yup.string().required('Inwarded by is required'),
-  uat_value: yup.number().required('UAT value is required').positive('Must be positive'),
-  uat_unit: yup.string().oneOf(UAT_UNITS).required('UAT unit is required'),
+
   rolls: yup.array().of(
     yup.object().shape({
       roll_value: yup.number().required('Roll value is required').positive('Must be positive'),
       roll_unit: yup.string().oneOf(['KG', 'METER']).required('Roll unit is required'),
     })
-  ).min(1, 'At least one roll is required'),
+  ).min(1, 'At least one roll is required')
+  .test('weight-match', 'Total roll weights must equal fabric entry weight', function(rolls) {
+    const { quantity_value, quantity_unit } = this.parent;
+    
+    // Only validate weight matching for KG units
+    if (quantity_unit !== 'KG') return true;
+    
+    if (!rolls || rolls.length === 0) return false;
+    
+    // Calculate total weight from rolls (only KG rolls)
+    const totalRollWeight = rolls
+      .filter(roll => roll.roll_unit === 'KG')
+      .reduce((sum, roll) => sum + (roll.roll_value || 0), 0);
+    
+    // Allow small tolerance for decimal precision
+    const tolerance = 0.01;
+    return Math.abs(totalRollWeight - quantity_value) <= tolerance;
+  }),
 });
 
 interface InwardFormData {
@@ -56,8 +73,6 @@ interface InwardFormData {
   po_number: string;
   fabric_composition: string;
   inwarded_by: string;
-  uat_value: number;
-  uat_unit: string;
   rolls: Array<{
     roll_value: number;
     roll_unit: string;
@@ -86,10 +101,17 @@ const InwardForm: React.FC = () => {
     watch,
   } = useForm<InwardFormData>({
     resolver: yupResolver(fabricEntrySchema),
-    defaultValues: {
-      rolls: [{ roll_value: 0, roll_unit: 'KG' }],
-      inwarded_by: user?.email || '',
-    },
+          defaultValues: {
+        seller_name: '',
+        quantity_value: 1,
+        quantity_unit: QUANTITY_UNITS[0],
+        color: '',
+        fabric_type: FABRIC_TYPES[0],
+        po_number: '',
+        fabric_composition: '',
+        inwarded_by: user?.email || '',
+        rolls: [{ roll_value: 1, roll_unit: 'KG' }],
+      },
   });
 
   const { fields, append, remove } = useFieldArray({
@@ -98,7 +120,7 @@ const InwardForm: React.FC = () => {
   });
 
   const addRoll = () => {
-    append({ roll_value: 0, roll_unit: 'KG' });
+    append({ roll_value: 1, roll_unit: 'KG' });
   };
 
   const removeRoll = (index: number) => {
@@ -106,6 +128,19 @@ const InwardForm: React.FC = () => {
       remove(index);
     }
   };
+
+  // Watch form values for weight calculation
+  const watchedValues = watch();
+  const { quantity_value, quantity_unit, rolls } = watchedValues;
+
+  // Calculate total roll weight
+  const totalRollWeight = rolls
+    ?.filter(roll => roll.roll_unit === 'KG')
+    .reduce((sum, roll) => sum + (Number(roll.roll_value) || 0), 0) || 0;
+
+  const isWeightMatching = quantity_unit === 'KG' 
+    ? Math.abs(totalRollWeight - (Number(quantity_value) || 0)) <= 0.01
+    : true;
 
   const onSubmit = async (data: InwardFormData) => {
     setIsSubmitting(true);
@@ -120,8 +155,6 @@ const InwardForm: React.FC = () => {
         po_number: data.po_number,
         fabric_composition: data.fabric_composition,
         inwarded_by: data.inwarded_by,
-        uat_value: data.uat_value,
-        uat_unit: data.uat_unit as any,
         date_inwarded: new Date().toISOString().split('T')[0],
         status: 'PENDING_QUALITY' as any,
       };
@@ -137,7 +170,7 @@ const InwardForm: React.FC = () => {
       const { data: fabricEntry, error } = await createCompleteFabricEntry(completeFormData);
 
       if (error) {
-        throw new Error(typeof error === 'string' ? error : 'Failed to create fabric entry');
+        throw new Error(typeof error === 'string' ? error : `Failed to create fabric entry: ${(error as any)?.message || JSON.stringify(error)}`);
       }
 
       addNotification({
@@ -160,6 +193,10 @@ const InwardForm: React.FC = () => {
   };
 
   const currentDate = new Date().toLocaleDateString();
+
+
+
+
 
   return (
     <div className="space-y-8 max-w-5xl mx-auto p-6">
@@ -248,6 +285,7 @@ const InwardForm: React.FC = () => {
                   Fabric Type <span className="text-destructive">*</span>
                 </Label>
                 <Select 
+                  defaultValue={FABRIC_TYPES[0]}
                   onValueChange={(value) => setValue('fabric_type', value)}
                 >
                   <SelectTrigger className={errors.fabric_type ? "border-destructive" : ""}>
@@ -307,38 +345,7 @@ const InwardForm: React.FC = () => {
                 )}
               </div>
 
-              {/* UAT */}
-              <div className="space-y-2">
-                <Label htmlFor="uat_value">
-                  UAT <span className="text-destructive">*</span>
-                </Label>
-                <div className="flex space-x-2">
-                  <Input
-                    id="uat_value"
-                    type="number"
-                    step="0.01"
-                    {...register('uat_value')}
-                    placeholder="0.00"
-                    className={errors.uat_value ? "border-destructive" : ""}
-                  />
-                  <Select 
-                    defaultValue={UAT_UNITS[0]} 
-                    onValueChange={(value) => setValue('uat_unit', value)}
-                  >
-                    <SelectTrigger className="w-[100px]">
-                      <SelectValue placeholder="Unit" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {UAT_UNITS.map(unit => (
-                        <SelectItem key={unit} value={unit}>{unit}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {errors.uat_value && (
-                  <p className="text-sm text-destructive">{errors.uat_value.message}</p>
-                )}
-              </div>
+
             </div>
 
             {/* Fabric Composition */}
@@ -388,7 +395,7 @@ const InwardForm: React.FC = () => {
                         type="number"
                         step="0.01"
                         {...register(`rolls.${index}.roll_value` as const)}
-                        placeholder="0.00"
+                        placeholder="1.00"
                         className={errors.rolls?.[index]?.roll_value ? "border-destructive" : ""}
                       />
                       {errors.rolls?.[index]?.roll_value && (
@@ -439,6 +446,28 @@ const InwardForm: React.FC = () => {
               <Plus className="h-4 w-4" />
               Add Roll
             </Button>
+
+            {/* Weight Summary */}
+            {quantity_unit === 'KG' && (
+              <div className={`p-4 rounded-lg border ${isWeightMatching ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">Weight Summary</p>
+                    <p className="text-xs text-muted-foreground">Total roll weights vs fabric entry weight</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm">
+                      <span className="font-medium">{totalRollWeight.toFixed(2)} KG</span>
+                      <span className="text-muted-foreground"> / </span>
+                      <span className="font-medium">{(Number(quantity_value) || 0).toFixed(2)} KG</span>
+                    </p>
+                    <p className={`text-xs ${isWeightMatching ? 'text-green-600' : 'text-red-600'}`}>
+                      {isWeightMatching ? '✓ Weights match' : '✗ Weights do not match'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {errors.rolls && (
               <p className="text-sm text-destructive">{errors.rolls.message}</p>

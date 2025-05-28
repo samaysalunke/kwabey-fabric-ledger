@@ -10,8 +10,6 @@ interface InwardFormData {
   po_number: string;
   fabric_composition: string;
   inwarded_by: string;
-  uat_value: number;
-  uat_unit: string;
   rolls: Array<{
     roll_value: number;
     roll_unit: string;

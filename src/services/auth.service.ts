@@ -20,9 +20,13 @@ export function getCurrentUser() {
 }
 
 export function getUserRole(email: string): string | null {
-  for (const [role, roleEmail] of Object.entries(roleEmails)) {
-    if (roleEmail && email.toLowerCase() === roleEmail.toLowerCase()) {
-      return role;
+  for (const [role, roleEmailsString] of Object.entries(roleEmails)) {
+    if (roleEmailsString) {
+      // Split by comma and check if email is in the list
+      const emailList = roleEmailsString.split(',').map((e: string) => e.trim().toLowerCase());
+      if (emailList.includes(email.toLowerCase())) {
+        return role;
+      }
     }
   }
   return null;

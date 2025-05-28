@@ -1,20 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useForm, useWatch } from 'react-hook-form';
-import { yupResolver } from '@hookform/resolvers/yup';
-import { approvalSchema } from '../../../utils/validation';
 import { useApp } from '../../../contexts/AppContext';
 import { useAuth } from '../../../contexts/AuthContext';
-import { createQuantityApproval, getFabricEntryWithQuality } from '../../../services/approval.service';
-import { updateFabricEntry } from '../../../services/fabric.service';
-import { FabricEntry, QualityParameters } from '../../../utils/types';
-import { APPROVAL_STATUS, HOLD_REASONS } from '../../../utils/constants';
-
-interface ApprovalFormData {
-  approval_status: string;
-  hold_reason?: string;
-  not_approved_quantity?: number;
-  remarks?: string;
-}
+import { getFabricEntryWithQuality, createRollApproval, getRollApprovals, checkAndUpdateFabricEntryStatus } from '../../../services/approval.service';
+import { FabricEntry, QualityParameters, FabricRoll, RollApproval } from '../../../utils/types';
+import RollApprovalRow from './RollApprovalRow';
+import { Button } from '../../ui/button';
 
 interface ApprovalFormProps {
   fabricEntryId: string;
@@ -23,32 +13,20 @@ interface ApprovalFormProps {
 
 interface FabricEntryWithQuality extends FabricEntry {
   quality_parameters?: QualityParameters[];
+  fabric_rolls?: FabricRoll[];
 }
 
 const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAdded }) => {
   const [fabricEntry, setFabricEntry] = useState<FabricEntryWithQuality | null>(null);
+  const [rollApprovals, setRollApprovals] = useState<RollApproval[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCompleted, setIsCompleted] = useState(false);
   const { addNotification } = useApp();
   const { user } = useAuth();
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    control,
-    formState: { errors },
-  } = useForm<ApprovalFormData>({
-    resolver: yupResolver(approvalSchema),
-  });
-
-  const approvalStatus = useWatch({
-    control,
-    name: 'approval_status',
-  });
-
   useEffect(() => {
     fetchFabricEntry();
+    fetchRollApprovals();
   }, [fabricEntryId]);
 
   const fetchFabricEntry = async () => {
@@ -71,48 +49,132 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
     }
   };
 
-  const onSubmit = async (data: ApprovalFormData) => {
-    setIsSubmitting(true);
+  const fetchRollApprovals = async () => {
     try {
-      // Create quantity approval
-      const approvalData = {
-        fabric_entry_id: fabricEntryId,
-        approval_status: data.approval_status as any,
-        hold_reason: data.approval_status === 'ON_HOLD' ? data.hold_reason as any : undefined,
-        not_approved_quantity: data.not_approved_quantity || undefined,
+      const { data, error } = await getRollApprovals(fabricEntryId);
+      if (error) {
+        console.error('Error fetching roll approvals:', error);
+        setRollApprovals([]);
+      } else {
+        setRollApprovals(data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching roll approvals:', error);
+      setRollApprovals([]);
+    }
+  };
+
+  const handleRollApproval = async (rollId: string, status: string, reason?: string, remarks?: string, notApprovedQuantity?: number, debitNoteFile?: File) => {
+    try {
+      const rollApprovalData: any = {
+        approval_status: status as any,
+        hold_reason: status === 'ON_HOLD' ? reason as any : undefined,
         approved_by: user?.email || '',
-        remarks: data.remarks,
+        remarks: remarks,
       };
 
-      const { error: approvalError } = await createQuantityApproval(approvalData);
-      if (approvalError) {
-        throw new Error(approvalError.message);
+      // Only add not_approved_quantity if it has a value (to avoid column errors)
+      if (notApprovedQuantity !== undefined && notApprovedQuantity !== null) {
+        rollApprovalData.not_approved_quantity = notApprovedQuantity;
       }
 
-      // Update fabric entry status
-      const newStatus = data.approval_status === 'APPROVED' ? 'READY_TO_ISSUE' : 'ON_HOLD';
-      const { error: updateError } = await updateFabricEntry(fabricEntryId, {
-        status: newStatus as any,
-      });
-      if (updateError) {
-        throw new Error(updateError.message);
+      // Handle debit note upload for holds
+      if (status === 'ON_HOLD' && debitNoteFile) {
+        // Generate a unique filename for the debit note
+        const fileName = `debit_notes/rolls/${rollId}_${Date.now()}_${debitNoteFile.name}`;
+        rollApprovalData.debit_note_url = fileName;
+        
+        // In a real implementation, you would upload to Supabase storage here:
+        // const { data: uploadData, error: uploadError } = await supabase.storage
+        //   .from('documents')
+        //   .upload(fileName, debitNoteFile);
+        // 
+        // if (uploadError) {
+        //   throw new Error('Failed to upload debit note');
+        // }
+        
+        console.log('Debit note file uploaded:', fileName);
+      }
+
+      const { error } = await createRollApproval(rollId, rollApprovalData);
+      if (error) {
+        throw new Error(error.message);
       }
 
       addNotification({
         type: 'success',
-        message: `Fabric quantity ${data.approval_status.toLowerCase()} successfully!`,
+        message: status === 'ON_HOLD' 
+          ? `Roll put on hold with debit note successfully!`
+          : `Roll ${status.toLowerCase()} successfully!`,
       });
 
-      reset();
-      onApprovalAdded();
+      // Refresh both fabric entry and roll approvals
+      await Promise.all([fetchFabricEntry(), fetchRollApprovals()]);
+
+      // Check if all rolls are processed and update fabric entry status
+      console.log('Checking completion status for fabric entry:', fabricEntryId);
+      const statusResult = await checkAndUpdateFabricEntryStatus(fabricEntryId);
+      console.log('Status check result:', statusResult);
+      
+      if (statusResult.success && statusResult.allProcessed) {
+        setIsCompleted(true);
+        addNotification({
+          type: 'success',
+          message: `All rolls processed! Fabric entry status updated to ${statusResult.finalStatus}`,
+        });
+        
+        // Notify parent to refresh the approval list (this will remove completed entries)
+        setTimeout(() => {
+          onApprovalAdded();
+        }, 2000); // Give user time to see the completion message
+      } else if (statusResult.success) {
+        console.log('Not all rolls processed yet:', statusResult.message);
+      } else {
+        console.error('Failed to check status:', statusResult.message);
+      }
+
     } catch (error) {
       addNotification({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Failed to process approval',
+        message: error instanceof Error ? error.message : 'Failed to process roll approval',
       });
-    } finally {
-      setIsSubmitting(false);
     }
+  };
+
+  // Manual completion check function for debugging
+  const handleManualCompletionCheck = async () => {
+    try {
+      console.log('Manual completion check for fabric entry:', fabricEntryId);
+      const statusResult = await checkAndUpdateFabricEntryStatus(fabricEntryId);
+      console.log('Manual status check result:', statusResult);
+      
+      addNotification({
+        type: 'info',
+        message: `Status check: ${statusResult.message}`,
+      });
+
+      if (statusResult.success && statusResult.allProcessed) {
+        setIsCompleted(true);
+        addNotification({
+          type: 'success',
+          message: `Fabric entry completed! Status: ${statusResult.finalStatus}`,
+        });
+        
+        setTimeout(() => {
+          onApprovalAdded();
+        }, 2000);
+      }
+    } catch (error) {
+      console.error('Manual completion check error:', error);
+      addNotification({
+        type: 'error',
+        message: 'Failed to check completion status',
+      });
+    }
+  };
+
+  const getRollApprovalForRoll = (rollId: string): RollApproval | undefined => {
+    return rollApprovals.find(approval => approval.fabric_roll_id === rollId);
   };
 
   if (loading) {
@@ -140,11 +202,33 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
     );
   }
 
+  // Show completion message when all rolls are processed
+  if (isCompleted) {
+    return (
+      <div className="bg-white shadow rounded-lg p-6">
+        <div className="text-center py-12">
+          <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100 mb-4">
+            <svg className="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">All Rolls Processed!</h3>
+          <p className="text-sm text-gray-500 mb-4">
+            This fabric entry has been completed and will be removed from the approval queue.
+          </p>
+          <div className="text-xs text-gray-400">
+            Redirecting in a moment...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const qualityParams = fabricEntry.quality_parameters?.[0];
 
   return (
     <div className="bg-white shadow rounded-lg p-6">
-      <h2 className="text-lg font-medium text-gray-900 mb-6">Quantity Approval</h2>
+      <h2 className="text-lg font-medium text-gray-900 mb-6">Roll-Level Quantity Approval</h2>
 
       {/* Fabric Entry Summary */}
       <div className="bg-gray-50 rounded-lg p-4 mb-6">
@@ -210,136 +294,45 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
         </div>
       )}
 
-      {/* Approval Form */}
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        {/* Approval Status */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Approval Status *
-          </label>
-          <select
-            {...register('approval_status')}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-          >
-            <option value="">Select approval status</option>
-            {APPROVAL_STATUS.map(status => (
-              <option key={status} value={status}>
-                {status === 'APPROVED' ? 'Approve' : 'Hold'}
-              </option>
-            ))}
-          </select>
-          {errors.approval_status && (
-            <p className="mt-1 text-sm text-red-600">{errors.approval_status.message}</p>
-          )}
-        </div>
-
-        {/* Hold Reason (conditional) */}
-        {approvalStatus === 'ON_HOLD' && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Hold Reason *
-            </label>
-            <select
-              {...register('hold_reason')}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+      {/* Individual Rolls - Roll-Level Approval Only */}
+      {fabricEntry.fabric_rolls && fabricEntry.fabric_rolls.length > 0 ? (
+        <div className="bg-white border rounded-lg p-4">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-medium text-gray-900">Roll-Level Approval</h3>
+            <Button 
+              onClick={handleManualCompletionCheck}
+              variant="outline"
+              size="sm"
+              className="text-xs"
             >
-              <option value="">Select hold reason</option>
-              {HOLD_REASONS.map(reason => (
-                <option key={reason} value={reason}>
-                  {reason === 'QUANTITY_INSUFFICIENT' ? 'Quantity Insufficient' : 'Material Defective'}
-                </option>
-              ))}
-            </select>
-            {errors.hold_reason && (
-              <p className="mt-1 text-sm text-red-600">{errors.hold_reason.message}</p>
-            )}
+              🔄 Check Completion
+            </Button>
           </div>
-        )}
-
-        {/* Not Approved Quantity (optional) */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Not Approved Quantity (Optional)
-          </label>
-          <div className="flex">
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max={fabricEntry.quantity_value}
-              {...register('not_approved_quantity')}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-              placeholder="e.g., 10.50"
-            />
-            <span className="inline-flex items-center px-3 py-2 border border-l-0 border-gray-300 bg-gray-50 text-gray-500 text-sm rounded-r-md">
-              {fabricEntry.quantity_unit}
-            </span>
-          </div>
-          {errors.not_approved_quantity && (
-            <p className="mt-1 text-sm text-red-600">{errors.not_approved_quantity.message}</p>
-          )}
-          <p className="mt-1 text-xs text-gray-500">
-            Leave empty to approve/hold the full quantity ({fabricEntry.quantity_value} {fabricEntry.quantity_unit})
+          <p className="text-sm text-gray-600 mb-4">
+            Approve or hold each roll individually. All rolls must be processed to complete the fabric entry approval.
           </p>
+          <div className="space-y-3">
+            {fabricEntry.fabric_rolls.map((roll, index) => {
+              const rollApproval = getRollApprovalForRoll(roll.id);
+              return (
+                <RollApprovalRow
+                  key={`${roll.id}-${rollApproval?.approval_status || 'pending'}`}
+                  roll={roll}
+                  batchNumber={roll.batch_number}
+                  rollApproval={rollApproval}
+                  onApprovalChange={(rollId: string, status: string, reason?: string, remarks?: string, notApprovedQuantity?: number, debitNoteFile?: File) => {
+                    handleRollApproval(rollId, status, reason, remarks, notApprovedQuantity, debitNoteFile);
+                  }}
+                />
+              );
+            })}
+          </div>
         </div>
-
-        {/* Approved By (Read-only) */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Approved By
-          </label>
-          <input
-            type="text"
-            value={user?.email || ''}
-            disabled
-            className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-gray-500"
-          />
+      ) : (
+        <div className="bg-white border rounded-lg p-6 text-center">
+          <p className="text-gray-500">No rolls found for this fabric entry.</p>
         </div>
-
-        {/* Remarks */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Remarks (Optional)
-          </label>
-          <textarea
-            {...register('remarks')}
-            rows={3}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-            placeholder="Add any additional notes about the approval decision..."
-          />
-        </div>
-
-        {/* Submit Buttons */}
-        <div className="flex justify-end space-x-4">
-          <button
-            type="button"
-            onClick={() => reset()}
-            className="px-6 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
-          >
-            Reset
-          </button>
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className={`px-6 py-2 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-              approvalStatus === 'APPROVED'
-                ? 'bg-green-600 hover:bg-green-700 focus:ring-green-500'
-                : approvalStatus === 'ON_HOLD'
-                ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
-                : 'bg-gray-600 hover:bg-gray-700 focus:ring-gray-500'
-            }`}
-          >
-            {isSubmitting 
-              ? 'Processing...' 
-              : approvalStatus === 'APPROVED' 
-                ? 'Approve Quantity' 
-                : approvalStatus === 'ON_HOLD'
-                ? 'Hold Quantity'
-                : 'Submit Decision'
-            }
-          </button>
-        </div>
-      </form>
+      )}
     </div>
   );
 };

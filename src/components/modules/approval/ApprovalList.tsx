@@ -25,6 +25,7 @@ const ApprovalList: React.FC<ApprovalListProps> = ({
   const fetchPendingEntries = async () => {
     try {
       setLoading(true);
+      // Only fetch entries that are quality checked but not yet fully processed
       const { data, error } = await getFabricEntries({ status: 'QUALITY_CHECKED' });
       
       if (error) {
