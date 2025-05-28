@@ -25,6 +25,8 @@ const ApprovalList: React.FC<ApprovalListProps> = ({
   const fetchPendingEntries = async () => {
     try {
       setLoading(true);
+      console.log('🔄 ApprovalList: Fetching pending entries...');
+      
       // Only fetch entries that are quality checked but not yet fully processed
       const { data, error } = await getFabricEntries({ status: 'QUALITY_CHECKED' });
       
@@ -32,8 +34,17 @@ const ApprovalList: React.FC<ApprovalListProps> = ({
         throw new Error(error.message);
       }
 
+      console.log('📋 ApprovalList: Found entries:', data?.length || 0);
+      console.log('📊 ApprovalList: Entry details:', data?.map(e => ({ 
+        id: e.id, 
+        seller: e.seller_name, 
+        po: e.po_number, 
+        status: e.status 
+      })));
+
       setFabricEntries(data || []);
     } catch (error) {
+      console.error('❌ ApprovalList: Error fetching entries:', error);
       addNotification({
         type: 'error',
         message: error instanceof Error ? error.message : 'Failed to fetch fabric entries',

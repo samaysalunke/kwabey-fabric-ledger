@@ -66,6 +66,8 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
 
   const handleRollApproval = async (rollId: string, status: string, reason?: string, remarks?: string, notApprovedQuantity?: number, debitNoteFile?: File) => {
     try {
+      console.log('🚀 Starting roll approval process:', { rollId, status, reason, remarks, notApprovedQuantity });
+      
       const rollApprovalData: any = {
         approval_status: status as any,
         hold_reason: status === 'ON_HOLD' ? reason as any : undefined,
@@ -80,26 +82,39 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
 
       // Handle debit note upload for holds
       if (status === 'ON_HOLD' && debitNoteFile) {
-        // Generate a unique filename for the debit note
-        const fileName = `debit_notes/rolls/${rollId}_${Date.now()}_${debitNoteFile.name}`;
-        rollApprovalData.debit_note_url = fileName;
-        
-        // In a real implementation, you would upload to Supabase storage here:
-        // const { data: uploadData, error: uploadError } = await supabase.storage
-        //   .from('documents')
-        //   .upload(fileName, debitNoteFile);
-        // 
-        // if (uploadError) {
-        //   throw new Error('Failed to upload debit note');
-        // }
-        
-        console.log('Debit note file uploaded:', fileName);
+        try {
+          console.log('📎 Uploading debit note file:', debitNoteFile.name);
+          // Upload file to Supabase storage
+          const { uploadFile } = await import('../../../services/file.service');
+          const fileName = `debit_notes/rolls/${rollId}_${Date.now()}_${debitNoteFile.name}`;
+          
+          const { data: uploadData, error: uploadError } = await uploadFile(debitNoteFile, 'ftp-documents', fileName);
+          
+          if (uploadError) {
+            throw new Error(`Failed to upload debit note: ${uploadError.message}`);
+          }
+          
+          rollApprovalData.debit_note_url = fileName;
+          console.log('✅ Debit note file uploaded successfully:', fileName);
+        } catch (uploadError) {
+          console.error('❌ Debit note upload failed:', uploadError);
+          addNotification({
+            type: 'error',
+            message: uploadError instanceof Error ? uploadError.message : 'Failed to upload debit note',
+          });
+          return; // Don't proceed with approval if upload fails
+        }
       }
 
-      const { error } = await createRollApproval(rollId, rollApprovalData);
+      console.log('💾 Creating roll approval with data:', rollApprovalData);
+      const { data: createdApproval, error } = await createRollApproval(rollId, rollApprovalData);
+      
       if (error) {
+        console.error('❌ Error creating roll approval:', error);
         throw new Error(error.message);
       }
+
+      console.log('✅ Roll approval created successfully:', createdApproval);
 
       addNotification({
         type: 'success',
@@ -108,13 +123,20 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
           : `Roll ${status.toLowerCase()} successfully!`,
       });
 
-      // Refresh both fabric entry and roll approvals
-      await Promise.all([fetchFabricEntry(), fetchRollApprovals()]);
+      // Refresh both fabric entry and roll approvals with better error handling
+      console.log('🔄 Refreshing data...');
+      try {
+        await Promise.all([fetchFabricEntry(), fetchRollApprovals()]);
+        console.log('✅ Data refreshed successfully');
+      } catch (refreshError) {
+        console.error('❌ Error refreshing data:', refreshError);
+        // Continue anyway, the approval was created
+      }
 
       // Check if all rolls are processed and update fabric entry status
-      console.log('Checking completion status for fabric entry:', fabricEntryId);
+      console.log('🔍 Checking completion status for fabric entry:', fabricEntryId);
       const statusResult = await checkAndUpdateFabricEntryStatus(fabricEntryId);
-      console.log('Status check result:', statusResult);
+      console.log('📊 Status check result:', statusResult);
       
       if (statusResult.success && statusResult.allProcessed) {
         setIsCompleted(true);
@@ -123,17 +145,25 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
           message: `All rolls processed! Fabric entry status updated to ${statusResult.finalStatus}`,
         });
         
-        // Notify parent to refresh the approval list (this will remove completed entries)
+        // Immediately notify parent to refresh the approval list
+        onApprovalAdded();
+        
+        // Show completion message for a moment, then redirect
         setTimeout(() => {
-          onApprovalAdded();
-        }, 2000); // Give user time to see the completion message
+          setIsCompleted(false); // Reset completion state for next entry
+        }, 3000);
       } else if (statusResult.success) {
-        console.log('Not all rolls processed yet:', statusResult.message);
+        console.log('⏳ Not all rolls processed yet:', statusResult.message);
+        // Still refresh the parent list to show updated status
+        onApprovalAdded();
       } else {
-        console.error('Failed to check status:', statusResult.message);
+        console.error('❌ Failed to check status:', statusResult.message);
+        // Still refresh the list in case of partial success
+        onApprovalAdded();
       }
 
     } catch (error) {
+      console.error('💥 Error in handleRollApproval:', error);
       addNotification({
         type: 'error',
         message: error instanceof Error ? error.message : 'Failed to process roll approval',
@@ -160,9 +190,15 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
           message: `Fabric entry completed! Status: ${statusResult.finalStatus}`,
         });
         
+        // Immediately refresh the list
+        onApprovalAdded();
+        
         setTimeout(() => {
-          onApprovalAdded();
-        }, 2000);
+          setIsCompleted(false);
+        }, 3000);
+      } else {
+        // Always refresh the list to sync with current state
+        onApprovalAdded();
       }
     } catch (error) {
       console.error('Manual completion check error:', error);
@@ -170,6 +206,8 @@ const ApprovalForm: React.FC<ApprovalFormProps> = ({ fabricEntryId, onApprovalAd
         type: 'error',
         message: 'Failed to check completion status',
       });
+      // Still refresh the list
+      onApprovalAdded();
     }
   };
 

@@ -122,17 +122,25 @@ export async function getRollApprovalByRollId(rollId: string) {
 // Check if all rolls in a fabric entry are processed and update fabric entry status
 export async function checkAndUpdateFabricEntryStatus(fabricEntryId: string) {
   try {
+    console.log('🔍 Checking completion status for fabric entry:', fabricEntryId);
+    
     // Get all rolls for this fabric entry
     const { data: rolls, error: rollsError } = await supabase
       .from('fabric_rolls')
       .select('id')
       .eq('fabric_entry_id', fabricEntryId);
 
-    if (rollsError) throw rollsError;
+    if (rollsError) {
+      console.error('❌ Error fetching rolls:', rollsError);
+      throw rollsError;
+    }
 
     if (!rolls || rolls.length === 0) {
+      console.log('⚠️ No rolls found for fabric entry:', fabricEntryId);
       return { success: false, message: 'No rolls found for this fabric entry' };
     }
+
+    console.log(`📊 Found ${rolls.length} rolls for fabric entry`);
 
     // Get all roll approvals for this fabric entry
     const { data: rollApprovals, error: approvalsError } = await supabase
@@ -140,28 +148,43 @@ export async function checkAndUpdateFabricEntryStatus(fabricEntryId: string) {
       .select('approval_status, fabric_roll_id')
       .in('fabric_roll_id', rolls.map(roll => roll.id));
 
-    if (approvalsError) throw approvalsError;
+    if (approvalsError) {
+      console.error('❌ Error fetching roll approvals:', approvalsError);
+      throw approvalsError;
+    }
 
     // Check if all rolls have been processed
     const totalRolls = rolls.length;
     const processedRolls = rollApprovals?.length || 0;
 
+    console.log(`📈 Progress: ${processedRolls}/${totalRolls} rolls processed`);
+
     if (processedRolls < totalRolls) {
       // Not all rolls are processed yet
-      return { success: true, message: 'Not all rolls processed yet', allProcessed: false };
+      console.log('⏳ Not all rolls processed yet');
+      return { success: true, message: `${processedRolls}/${totalRolls} rolls processed`, allProcessed: false };
     }
 
     // All rolls are processed, determine the overall status
     const hasHoldRolls = rollApprovals?.some(approval => approval.approval_status === 'ON_HOLD');
-    const newStatus = hasHoldRolls ? 'ON_HOLD' : 'READY_TO_ISSUE';
+    const newStatus = hasHoldRolls ? 'ON_HOLD' : 'APPROVED';
+
+    console.log(`🎯 All rolls processed! New status will be: ${newStatus}`);
+    console.log('📋 Roll approvals:', rollApprovals?.map(r => ({ rollId: r.fabric_roll_id, status: r.approval_status })));
 
     // Update fabric entry status
-    const { error: updateError } = await supabase
+    const { data: updateData, error: updateError } = await supabase
       .from('fabric_entries')
       .update({ status: newStatus })
-      .eq('id', fabricEntryId);
+      .eq('id', fabricEntryId)
+      .select();
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      console.error('❌ Error updating fabric entry status:', updateError);
+      throw updateError;
+    }
+
+    console.log('✅ Fabric entry status updated successfully:', updateData);
 
     return { 
       success: true, 
@@ -171,7 +194,7 @@ export async function checkAndUpdateFabricEntryStatus(fabricEntryId: string) {
     };
 
   } catch (error) {
-    console.error('Error checking and updating fabric entry status:', error);
-    return { success: false, message: 'Failed to update fabric entry status' };
+    console.error('💥 Error in checkAndUpdateFabricEntryStatus:', error);
+    return { success: false, message: `Failed to update fabric entry status: ${error instanceof Error ? error.message : 'Unknown error'}` };
   }
 } 
