@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { FabricRoll, ApprovalStatus, HoldReason, RollApproval } from '../../../utils/types';
 import { APPROVAL_STATUS, HOLD_REASONS } from '../../../utils/constants';
 import { updateRollApprovalDebitNote } from '../../../services/approval.service';
+import { uploadFile, getDebitNotePublicUrl, downloadFile } from '../../../services/file.service';
 import { useApp } from '../../../contexts/AppContext';
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -35,28 +36,43 @@ const RollApprovalRow: React.FC<RollApprovalRowProps> = ({
   const { addNotification } = useApp();
 
   useEffect(() => {
+    console.log('🔄 RollApprovalRow useEffect - Roll:', roll.batch_number, 'PropRollApproval:', propRollApproval);
     if (propRollApproval) {
       setRollApproval(propRollApproval);
       setIsProcessed(true);
       setProcessedStatus(propRollApproval.approval_status);
+      console.log('✅ Roll marked as processed:', propRollApproval.approval_status);
     } else {
       setRollApproval(null);
       setIsProcessed(false);
       setProcessedStatus('');
+      console.log('⏳ Roll marked as pending');
     }
-  }, [propRollApproval]);
+  }, [propRollApproval, roll.batch_number]);
 
   const handleApproval = () => {
     if (!selectedStatus) return;
     
+    console.log('🎯 handleApproval called for roll:', roll.batch_number, 'with status:', selectedStatus);
+    
     // For hold status, debit note is mandatory
     if (selectedStatus === 'ON_HOLD' && !debitNoteFile) {
+      console.log('❌ Debit note missing for hold status');
       addNotification({
         type: 'error',
         message: 'Debit note is required when putting a roll on hold',
       });
       return;
     }
+    
+    console.log('📤 Calling onApprovalChange with:', {
+      rollId: roll.id,
+      status: selectedStatus,
+      reason: selectedStatus === 'ON_HOLD' ? holdReason : undefined,
+      remarks: remarks || undefined,
+      notApprovedQuantity,
+      debitNoteFile: selectedStatus === 'ON_HOLD' ? debitNoteFile : undefined
+    });
     
     onApprovalChange(
       roll.id,
@@ -85,11 +101,11 @@ const RollApprovalRow: React.FC<RollApprovalRowProps> = ({
       // Upload file to Supabase storage
       const fileName = `debit_notes/rolls/${rollApproval.id}_${Date.now()}_${file.name}`;
       
-      // For now, we'll simulate the upload and store the filename
-      // In a real implementation, you would upload to Supabase storage:
-      // const { data: uploadData, error: uploadError } = await supabase.storage
-      //   .from('documents')
-      //   .upload(fileName, file);
+      const { data: uploadData, error: uploadError } = await uploadFile(file, 'ftp-documents', fileName);
+      
+      if (uploadError) {
+        throw new Error(`Failed to upload debit note: ${uploadError.message}`);
+      }
       
       // Update the roll approval with the debit note URL
       const { error } = await updateRollApprovalDebitNote(rollApproval.id, fileName);
@@ -111,6 +127,44 @@ const RollApprovalRow: React.FC<RollApprovalRowProps> = ({
       });
     } finally {
       setUploadingDebitNote(false);
+    }
+  };
+
+  const handleDebitNoteView = async () => {
+    if (!rollApproval?.debit_note_url) return;
+
+    try {
+      addNotification({
+        type: 'info',
+        message: 'Downloading debit note...',
+      });
+
+      const { data, error } = await downloadFile('ftp-documents', rollApproval.debit_note_url);
+      
+      if (error || !data) {
+        throw new Error(error?.message || 'Failed to download file');
+      }
+
+      // Create blob and download
+      const blob = new Blob([data], { type: data.type || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = rollApproval.debit_note_url.split('/').pop() || 'debit-note';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      addNotification({
+        type: 'success',
+        message: 'Debit note downloaded successfully!',
+      });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Failed to download debit note',
+      });
     }
   };
 
@@ -227,13 +281,10 @@ const RollApprovalRow: React.FC<RollApprovalRowProps> = ({
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => {
-                    // Download/view debit note
-                    window.open(rollApproval.debit_note_url, '_blank');
-                  }}
+                  onClick={handleDebitNoteView}
                 >
                   <Download className="h-4 w-4 mr-1" />
-                  View
+                  Download
                 </Button>
               ) : (
                 <div className="flex items-center">
